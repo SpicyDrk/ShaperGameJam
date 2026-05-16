@@ -105,3 +105,10 @@ InitTestScene*.unity*
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
 *.pdf
+
+# OES workflow state (not committed)
+.oes/
+
+# Windows: Claude Code bash redirect creates literal NUL files
+NUL
+*.md
