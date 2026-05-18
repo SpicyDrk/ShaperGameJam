@@ -15,10 +15,11 @@ using UnityEngine.UI;
 namespace ShapeConnections.Editor
 {
     /// <summary>
-    /// Editor menu items that build Phase-2 content (the level-00 assets and
-    /// Game.unity) from scratch. Re-runnable: existing files are overwritten so
+    /// Editor menu items that build level assets (level-00 Pass-Through, level-01 Cut)
+    /// and Game.unity from scratch. Re-runnable: existing files are overwritten so
     /// iterating on scene structure is a one-button rebuild, not manual prefab
-    /// surgery.
+    /// surgery. The same Game.unity is reused for each level; switch by re-running
+    /// the matching "Build Game Scene" menu item.
     /// </summary>
     public static class SceneScaffolder
     {
@@ -27,10 +28,13 @@ namespace ShapeConnections.Editor
         private const string LevelsDir  = "Assets/Levels";
         private const string ScenesDir  = "Assets/Scenes";
 
-        private const string SquareAsset       = ShapesDir + "/SquareNone.asset";
-        private const string PassThroughAsset  = NodesDir  + "/PassThrough.asset";
-        private const string Level00Asset      = LevelsDir + "/level-00-passthrough.asset";
-        private const string GameScene         = ScenesDir + "/Game.unity";
+        private const string SquareAsset             = ShapesDir + "/SquareNone.asset";
+        private const string TriangleAsset           = ShapesDir + "/TriangleNone.asset";
+        private const string PassThroughAsset        = NodesDir  + "/PassThrough.asset";
+        private const string CutSquareTrianglesAsset = NodesDir  + "/CutSquareToTwoTriangles.asset";
+        private const string Level00Asset            = LevelsDir + "/level-00-passthrough.asset";
+        private const string Level01Asset            = LevelsDir + "/level-01-cut.asset";
+        private const string GameScene               = ScenesDir + "/Game.unity";
 
         [MenuItem("Tools/Shape Connections/Build Level-00 Assets")]
         public static void BuildLevel00Assets()
@@ -86,16 +90,95 @@ namespace ShapeConnections.Editor
             Debug.Log($"[SceneScaffolder] Built level-00 assets at {ShapesDir}, {NodesDir}, {LevelsDir}.");
         }
 
+        [MenuItem("Tools/Shape Connections/Build Level-01 Assets")]
+        public static void BuildLevel01Assets()
+        {
+            EnsureFolder(ShapesDir);
+            EnsureFolder(NodesDir);
+            EnsureFolder(LevelsDir);
+
+            // Level-01 reuses the Square shape that level-00 creates; ensure it exists.
+            var square = CreateOrReplace<ShapeDefinition>(SquareAsset, asset =>
+            {
+                var so = new SerializedObject(asset);
+                so.FindProperty("kind").enumValueIndex  = (int)ShapeKind.Square;
+                so.FindProperty("color").enumValueIndex = (int)ShapeColor.None;
+                so.ApplyModifiedPropertiesWithoutUndo();
+            });
+
+            var triangle = CreateOrReplace<ShapeDefinition>(TriangleAsset, asset =>
+            {
+                var so = new SerializedObject(asset);
+                so.FindProperty("kind").enumValueIndex  = (int)ShapeKind.Triangle;
+                so.FindProperty("color").enumValueIndex = (int)ShapeColor.None;
+                so.ApplyModifiedPropertiesWithoutUndo();
+            });
+
+            var cut = CreateOrReplace<CutNodeDefinition>(CutSquareTrianglesAsset, asset =>
+            {
+                // Display name via SerializedObject (private field on NodeDefinition);
+                // shape references via the editor-only EditorConfigure to avoid the
+                // cross-asset SerializedObject persistence flakiness seen in Phase 2.
+                var so = new SerializedObject(asset);
+                var displayProp = so.FindProperty("displayName");
+                if (displayProp != null) displayProp.stringValue = "Cut Square→Triangles";
+                so.ApplyModifiedPropertiesWithoutUndo();
+                asset.EditorConfigure(input: square, top: triangle, bottom: triangle);
+            });
+
+            CreateOrReplace<LevelDefinition>(Level01Asset, asset =>
+            {
+                var so = new SerializedObject(asset);
+                so.FindProperty("gridWidth").intValue  = 3;
+                so.FindProperty("gridHeight").intValue = 3;
+
+                var inputs = so.FindProperty("inputs");
+                inputs.arraySize = 1;
+                inputs.GetArrayElementAtIndex(0).objectReferenceValue = square;
+
+                var targets = so.FindProperty("targets");
+                targets.arraySize = 2;
+                targets.GetArrayElementAtIndex(0).objectReferenceValue = triangle;
+                targets.GetArrayElementAtIndex(1).objectReferenceValue = triangle;
+
+                var palette = so.FindProperty("palette");
+                palette.arraySize = 1;
+                var entry = palette.GetArrayElementAtIndex(0);
+                entry.FindPropertyRelative("node").objectReferenceValue = cut;
+                entry.FindPropertyRelative("count").intValue = 1;
+
+                so.FindProperty("designerNotes").stringValue =
+                    "Cut a Square into two Triangles, wire each Cut output to a target socket.";
+                so.ApplyModifiedPropertiesWithoutUndo();
+            });
+
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+            Debug.Log($"[SceneScaffolder] Built level-01 assets at {ShapesDir}, {NodesDir}, {LevelsDir}.");
+        }
+
         [MenuItem("Tools/Shape Connections/Build Game Scene")]
         public static void BuildGameScene()
         {
             BuildLevel00Assets();
+            BuildGameSceneForLevel(Level00Asset, "level-00");
+        }
+
+        [MenuItem("Tools/Shape Connections/Build Game Scene (Level 01)")]
+        public static void BuildGameSceneLevel01()
+        {
+            BuildLevel01Assets();
+            BuildGameSceneForLevel(Level01Asset, "level-01");
+        }
+
+        private static void BuildGameSceneForLevel(string levelAssetPath, string label)
+        {
             EnsureFolder(ScenesDir);
 
-            var level = AssetDatabase.LoadAssetAtPath<LevelDefinition>(Level00Asset);
+            var level = AssetDatabase.LoadAssetAtPath<LevelDefinition>(levelAssetPath);
             if (level == null)
             {
-                Debug.LogError("[SceneScaffolder] level-00 asset not found after build — aborting scene build.");
+                Debug.LogError($"[SceneScaffolder] {label} asset not found at {levelAssetPath} — aborting scene build.");
                 return;
             }
 
@@ -103,7 +186,7 @@ namespace ShapeConnections.Editor
             BuildSceneContents(scene, level);
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene, GameScene);
-            Debug.Log($"[SceneScaffolder] Built {GameScene}. Open it and press Play to test the loop.");
+            Debug.Log($"[SceneScaffolder] Built {GameScene} for {label}. Open it and press Play to test the loop.");
         }
 
         private static void BuildSceneContents(Scene scene, LevelDefinition level)
